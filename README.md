@@ -424,6 +424,23 @@ Obscura implements the Chrome DevTools Protocol for Puppeteer/Playwright compati
 | **Input** | dispatchMouseEvent, dispatchKeyEvent |
 | **LP** | getMarkdown (DOM-to-Markdown conversion) |
 
+### Per-context proxy
+
+`Target.createBrowserContext` accepts `proxyServer` and `proxyBypassList`, so a CDP client can route each browser context through a different proxy without restarting the server. This matches Chrome: the proxy is fixed when the context is created and cannot be changed later. Puppeteer's `browser.createBrowserContext({ proxyServer })` and Playwright's `browser.newContext({ proxy })` use this method.
+
+```json
+{
+  "id": 1,
+  "method": "Target.createBrowserContext",
+  "params": {
+    "proxyServer": "http://user:pass@proxy.example.com:8080",
+    "proxyBypassList": "localhost, .internal.example.com"
+  }
+}
+```
+
+Open pages with the returned `browserContextId` via `Target.createTarget`. Contexts created without `proxyServer` inherit the server-wide proxy from `obscura serve --proxy`. The bypass list accepts comma-separated hosts, domains (a leading dot is optional) and their subdomains, plus `*` and IP/CIDR entries; Chrome's full bypass grammar (`<-loopback>`, `<local>`) is not supported. Proxy authentication challenges (407) are not handled, so embed credentials in `proxyServer`. With `--stealth`, prefer an HTTP proxy because the stealth transport's SOCKS5 support is limited. See [stealth and proxies](docs/Configure-stealth-and-proxies.md) for details.
+
 Fetch interception pauses matching main-document HTTP requests before transport. Fulfillment supplies the document body without contacting the server; continuation URL, method, body, and header overrides apply to that request only.
 
 To download a large resource without one giant `Network.getResponseBody` blob, call `Fetch.takeResponseBodyAsStream` then read it in chunks with `IO.read` / `IO.close`. Response bodies over the cache limit (`OBSCURA_NETWORK_BODY_BUFFER_BYTES`, default 2 MiB) are not retained, so raise that limit when you intend to stream large downloads.
