@@ -229,6 +229,16 @@ impl StealthHttpClient {
         proxy_url: Option<&str>,
         allow_private_network: bool,
     ) -> Self {
+        Self::with_proxy_and_bypass(cookie_jar, proxy_url, None, allow_private_network)
+    }
+
+    /// Like `with_proxy`, with a Chrome-style proxy bypass list.
+    pub fn with_proxy_and_bypass(
+        cookie_jar: Arc<CookieJar>,
+        proxy_url: Option<&str>,
+        proxy_bypass_list: Option<&str>,
+        allow_private_network: bool,
+    ) -> Self {
         let emulation_opts = wreq_util::Emulation::builder()
             .profile(wreq_util::Profile::Chrome145)
             .platform(wreq_util::Platform::Windows)
@@ -287,7 +297,12 @@ impl StealthHttpClient {
         }
 
         if let Some(proxy) = proxy_url {
-            if let Ok(p) = wreq::Proxy::all(proxy) {
+            if let Ok(mut p) = wreq::Proxy::all(proxy) {
+                if let Some(bypass) = proxy_bypass_list.filter(|list| !list.trim().is_empty()) {
+                    if let Some(no_proxy) = wreq::NoProxy::from_string(bypass) {
+                        p = p.no_proxy(Some(no_proxy));
+                    }
+                }
                 builder = builder.proxy(p);
             }
         }

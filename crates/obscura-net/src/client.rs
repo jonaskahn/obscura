@@ -884,6 +884,10 @@ async fn read_reqwest_body_into(
 pub struct ObscuraHttpClient {
     client: tokio::sync::OnceCell<Client>,
     proxy_url: Option<String>,
+    /// Hosts routed directly instead of through `proxy_url`. Matches the
+    /// simple part of Chrome's `--proxy-bypass-list`: comma-separated hosts,
+    /// domains (including a leading dot) and subdomains.
+    proxy_bypass_list: Option<String>,
     pub cookie_jar: Arc<CookieJar>,
     pub user_agent: RwLock<String>,
     pub accept_language: RwLock<String>,
@@ -915,6 +919,7 @@ struct ResourceCacheKey {
     referrer: Option<String>,
     user_agent: String,
     extra_headers: Vec<(String, String)>,
+    proxy: Option<String>,
     max_response_bytes: usize,
 }
 
@@ -1161,9 +1166,22 @@ impl ObscuraHttpClient {
         proxy_url: Option<&str>,
         allow_private_network: bool,
     ) -> Self {
+        Self::with_proxy_options(cookie_jar, proxy_url, None, allow_private_network)
+    }
+
+    /// Like `with_full_options`, plus a Chrome-style proxy bypass list.
+    pub fn with_proxy_options(
+        cookie_jar: Arc<CookieJar>,
+        proxy_url: Option<&str>,
+        proxy_bypass_list: Option<&str>,
+        allow_private_network: bool,
+    ) -> Self {
         ObscuraHttpClient {
             client: tokio::sync::OnceCell::new(),
             proxy_url: proxy_url.map(|s| s.to_string()),
+            proxy_bypass_list: proxy_bypass_list
+                .filter(|list| !list.trim().is_empty())
+                .map(|list| list.to_string()),
             cookie_jar,
             user_agent: RwLock::new(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36".to_string(),
@@ -1210,7 +1228,12 @@ impl ObscuraHttpClient {
             }
 
             if let Some(ref proxy) = self.proxy_url {
-                if let Ok(p) = reqwest::Proxy::all(proxy.as_str()) {
+                if let Ok(mut p) = reqwest::Proxy::all(proxy.as_str()) {
+                    if let Some(ref bypass) = self.proxy_bypass_list {
+                        if let Some(no_proxy) = reqwest::NoProxy::from_string(bypass) {
+                            p = p.no_proxy(Some(no_proxy));
+                        }
+                    }
                     builder = builder.proxy(p);
                 }
             }
@@ -1234,6 +1257,11 @@ impl ObscuraHttpClient {
     /// requests through the same upstream proxy.
     pub fn proxy_url(&self) -> Option<&str> {
         self.proxy_url.as_deref()
+    }
+
+    /// Read-only accessor for the proxy bypass list (if any).
+    pub fn proxy_bypass_list(&self) -> Option<&str> {
+        self.proxy_bypass_list.as_deref()
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<Response, ObscuraNetError> {
@@ -1357,6 +1385,7 @@ impl ObscuraHttpClient {
             referrer: request.referrer.as_ref().map(ToString::to_string),
             user_agent: self.user_agent.read().await.clone(),
             extra_headers,
+            proxy: self.proxy_url.clone(),
             max_response_bytes: request.max_response_bytes,
         })
     }
@@ -1940,6 +1969,7 @@ mod resource_cache_tests {
             referrer: None,
             user_agent: "cache-test".into(),
             extra_headers: Vec::new(),
+            proxy: None,
             max_response_bytes: 1024,
         };
         let response = Response {
@@ -3582,6 +3612,36 @@ mod cert_env_tests {
             None,
             Some(OsStr::new("/etc/ssl/certs"))
         ));
+    }
+}
+
+#[cfg(test)]
+mod proxy_options_tests {
+    use super::ObscuraHttpClient;
+    use crate::CookieJar;
+    use std::sync::Arc;
+
+    #[test]
+    fn with_proxy_options_round_trips_proxy_and_bypass() {
+        let jar = Arc::new(CookieJar::new());
+        let client = ObscuraHttpClient::with_proxy_options(
+            jar,
+            Some("http://proxy.test:8080"),
+            Some("localhost, .internal.test"),
+            false,
+        );
+        assert_eq!(client.proxy_url(), Some("http://proxy.test:8080"));
+        assert_eq!(client.proxy_bypass_list(), Some("localhost, .internal.test"));
+    }
+
+    #[test]
+    fn with_full_options_has_no_bypass_list() {
+        let client = ObscuraHttpClient::with_full_options(
+            Arc::new(CookieJar::new()),
+            Some("http://proxy.test:8080"),
+            false,
+        );
+        assert_eq!(client.proxy_bypass_list(), None);
     }
 }
 
