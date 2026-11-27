@@ -22,6 +22,8 @@ pub struct BrowserContext {
     pub ua_platform: String,
     pub ua_platform_version: String,
     pub proxy_url: Option<String>,
+    /// Chrome-style proxy bypass list for `proxy_url`.
+    pub proxy_bypass_list: Option<String>,
     pub robots_cache: Arc<RobotsCache>,
     pub obey_robots: bool,
     pub stealth: bool,
@@ -215,6 +217,7 @@ impl BrowserContext {
             ua_platform,
             ua_platform_version,
             proxy_url,
+            proxy_bypass_list: None,
             robots_cache: Arc::new(RobotsCache::new()),
             obey_robots: false,
             stealth,
@@ -263,14 +266,31 @@ impl BrowserContext {
     /// current cookies; incognito copies start empty and never write to the
     /// template's storage directory.
     pub fn isolated_copy(&self, id: String, persistent: bool) -> Self {
+        self.isolated_copy_with_proxy(id, persistent, None, None)
+    }
+
+    /// Like `isolated_copy`, with a proxy override for the new context.
+    /// Chrome's CDP `Target.createBrowserContext` sets `proxyServer` at
+    /// creation time, so the override lives on the copy and never mutates the
+    /// template. `None` inherits the template's configuration.
+    pub fn isolated_copy_with_proxy(
+        &self,
+        id: String,
+        persistent: bool,
+        proxy: Option<String>,
+        bypass: Option<String>,
+    ) -> Self {
+        let proxy_url = proxy.or_else(|| self.proxy_url.clone());
+        let proxy_bypass_list = bypass.or_else(|| self.proxy_bypass_list.clone());
         let cookie_jar = Arc::new(CookieJar::new());
         if persistent {
             cookie_jar.copy_from(&self.cookie_jar);
         }
 
-        let mut client = ObscuraHttpClient::with_full_options(
+        let mut client = ObscuraHttpClient::with_proxy_options(
             cookie_jar.clone(),
-            self.proxy_url.as_deref(),
+            proxy_url.as_deref(),
+            proxy_bypass_list.as_deref(),
             self.allow_private_network,
         );
         if self.stealth {
@@ -300,7 +320,8 @@ impl BrowserContext {
             platform: self.platform.clone(),
             ua_platform: self.ua_platform.clone(),
             ua_platform_version: self.ua_platform_version.clone(),
-            proxy_url: self.proxy_url.clone(),
+            proxy_url,
+            proxy_bypass_list,
             robots_cache: Arc::new(RobotsCache::new()),
             obey_robots: self.obey_robots,
             stealth: self.stealth,

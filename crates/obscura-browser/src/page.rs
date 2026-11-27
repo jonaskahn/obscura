@@ -1117,9 +1117,10 @@ impl Page {
             // http://, which only works when the upstream happens to be a
             // Clash-style mixed-mode proxy and breaks plain SOCKS5 servers
             // like `ssh -ND` (#160).
-            let mut client = StealthHttpClient::with_proxy(
+            let mut client = StealthHttpClient::with_proxy_and_bypass(
                 context.cookie_jar.clone(),
                 context.proxy_url.as_deref(),
+                context.proxy_bypass_list.as_deref(),
                 context.allow_private_network,
             ).with_user_agent(context.user_agent_override.clone());
             client.allow_file_access = context.allow_file_access;
