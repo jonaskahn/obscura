@@ -91,6 +91,29 @@ Use the returned `browserContextId` with `Target.createTarget` to open pages
 in that context. Contexts created without `proxyServer` inherit the proxy
 passed to `obscura serve --proxy` (if any).
 
+### Per-target proxy over CDP (Obscura extension)
+
+Raw CDP callers can set a different proxy on **each** `Target.createTarget`
+call, without creating a browser context first. This is an Obscura extension:
+Chrome only accepts a proxy on `createBrowserContext`, so Puppeteer and
+Playwright have no native API for it. When `proxyServer` or `proxyBypassList`
+is present, Obscura creates a fresh isolated browser context carrying that
+proxy and opens the page in it; the returned `browserContextId` is reported in
+the `targetInfo` events. Each proxied target therefore has its own cookie jar
+and storage.
+
+```json
+{
+  "id": 1,
+  "method": "Target.createTarget",
+  "params": {
+    "url": "https://example.com",
+    "proxyServer": "http://user:pass@proxy.example.com:8080",
+    "proxyBypassList": "localhost, .internal.example.com"
+  }
+}
+```
+
 `proxyBypassList` accepts comma-separated hosts, domains (a leading dot is
 optional) and their subdomains, plus `*` and IP/CIDR entries. Chrome's full
 bypass grammar (`<-loopback>`, `<local>`, etc.) is not supported. The bypass

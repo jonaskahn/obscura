@@ -441,6 +441,8 @@ Obscura implements the Chrome DevTools Protocol for Puppeteer/Playwright compati
 
 Open pages with the returned `browserContextId` via `Target.createTarget`. Contexts created without `proxyServer` inherit the server-wide proxy from `obscura serve --proxy`. The bypass list accepts comma-separated hosts, domains (a leading dot is optional) and their subdomains, plus `*` and IP/CIDR entries; Chrome's full bypass grammar (`<-loopback>`, `<local>`) is not supported. Proxy authentication challenges (407) are not handled, so embed credentials in `proxyServer`. With `--stealth`, prefer an HTTP proxy because the stealth transport's SOCKS5 support is limited. See [stealth and proxies](docs/Configure-stealth-and-proxies.md) for details.
 
+Raw CDP callers can also set a different proxy on **each** `Target.createTarget` call (`proxyServer` / `proxyBypassList`), without creating a context first. This is an Obscura extension, since Chrome only accepts a proxy on `createBrowserContext`: each such target gets a fresh isolated context with its own proxy, cookies and storage.
+
 Fetch interception pauses matching main-document HTTP requests before transport. Fulfillment supplies the document body without contacting the server; continuation URL, method, body, and header overrides apply to that request only.
 
 To download a large resource without one giant `Network.getResponseBody` blob, call `Fetch.takeResponseBodyAsStream` then read it in chunks with `IO.read` / `IO.close`. Response bodies over the cache limit (`OBSCURA_NETWORK_BODY_BUFFER_BYTES`, default 2 MiB) are not retained, so raise that limit when you intend to stream large downloads.
