@@ -293,9 +293,21 @@ impl CdpContext {
     }
 
     pub fn create_browser_context(&mut self) -> String {
+        self.create_browser_context_with_proxy(None, None)
+    }
+
+    /// `proxy` and `bypass` are `Some` values to override for the new context,
+    /// `None` to inherit the server-wide startup configuration.
+    pub fn create_browser_context_with_proxy(
+        &mut self,
+        proxy: Option<String>,
+        bypass: Option<String>,
+    ) -> String {
         self.browser_context_counter += 1;
         let id = format!("context-{}", self.browser_context_counter);
-        let context = Arc::new(self.default_context.isolated_copy(id.clone(), false));
+        let context = Arc::new(self.default_context.isolated_copy_with_proxy(
+            id.clone(), false, proxy, bypass,
+        ));
         self.browser_contexts.insert(id.clone(), context);
         id
     }

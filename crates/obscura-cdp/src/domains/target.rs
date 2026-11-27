@@ -252,7 +252,20 @@ pub async fn handle(
             Ok(json!({ "browserContextIds": ids }))
         }
         "createBrowserContext" => {
-            let id = ctx.create_browser_context();
+            // Chrome sets the proxy when the context is created; there is no
+            // runtime setter. `disposeOnDetach` and
+            // `originsWithUniversalNetworkAccess` are accepted and ignored.
+            let proxy = params
+                .get("proxyServer")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let bypass = params
+                .get("proxyBypassList")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let id = ctx.create_browser_context_with_proxy(proxy, bypass);
             Ok(json!({ "browserContextId": id }))
         }
         "disposeBrowserContext" => {
@@ -360,6 +373,37 @@ pub(crate) fn close_target(ctx: &mut CdpContext, target_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_browser_context_uses_proxy_server_and_bypass_list() {
+        let mut ctx = CdpContext::new_with_proxy(Some("http://startup.test:8080".into()));
+        let result = handle("createBrowserContext", &json!({
+            "proxyServer": "socks5://proxy.test:1080",
+            "proxyBypassList": "localhost, .internal.test",
+            "disposeOnDetach": true,
+            "originsWithUniversalNetworkAccess": ["https://example.test"],
+        }), &mut ctx, &None).await.unwrap();
+        let id = result["browserContextId"].as_str().unwrap();
+        let created = ctx.browser_context(id).unwrap();
+        assert_eq!(created.proxy_url.as_deref(), Some("socks5://proxy.test:1080"));
+        assert_eq!(created.proxy_bypass_list.as_deref(), Some("localhost, .internal.test"));
+        assert_eq!(created.http_client.proxy_url(), Some("socks5://proxy.test:1080"));
+        assert_eq!(created.http_client.proxy_bypass_list(), Some("localhost, .internal.test"));
+        // The startup template is untouched.
+        assert_eq!(ctx.default_context.proxy_url.as_deref(), Some("http://startup.test:8080"));
+        assert_eq!(ctx.default_context.proxy_bypass_list, None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_browser_context_without_proxy_inherits_startup_proxy() {
+        let mut ctx = CdpContext::new_with_proxy(Some("http://startup.test:8080".into()));
+        let result = handle("createBrowserContext", &json!({}), &mut ctx, &None)
+            .await.unwrap();
+        let id = result["browserContextId"].as_str().unwrap();
+        let created = ctx.browser_context(id).unwrap();
+        assert_eq!(created.proxy_url.as_deref(), Some("http://startup.test:8080"));
+        assert_eq!(created.proxy_bypass_list, None);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn startup_denials_use_runtime_errors_and_unknown_methods_stay_unknown() {
