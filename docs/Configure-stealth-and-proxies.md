@@ -68,6 +68,42 @@ SOCKS5:
 obscura fetch https://example.com --proxy socks5://proxy.example.com:1080
 ```
 
+### Per-context proxy over CDP
+
+A CDP client can give each browser context its own proxy with
+`Target.createBrowserContext`. This matches Chrome's CDP behaviour: the proxy
+is fixed at context creation and cannot be changed later. Puppeteer's
+`browser.createBrowserContext({ proxyServer })` and Playwright's
+`browser.newContext({ proxy })` drive this method.
+
+```json
+{
+  "id": 1,
+  "method": "Target.createBrowserContext",
+  "params": {
+    "proxyServer": "http://user:pass@proxy.example.com:8080",
+    "proxyBypassList": "localhost, .internal.example.com"
+  }
+}
+```
+
+Use the returned `browserContextId` with `Target.createTarget` to open pages
+in that context. Contexts created without `proxyServer` inherit the proxy
+passed to `obscura serve --proxy` (if any).
+
+`proxyBypassList` accepts comma-separated hosts, domains (a leading dot is
+optional) and their subdomains, plus `*` and IP/CIDR entries. Chrome's full
+bypass grammar (`<-loopback>`, `<local>`, etc.) is not supported. The bypass
+list routes matching hosts directly, bypassing the proxy for that context.
+
+`disposeOnDetach` and `originsWithUniversalNetworkAccess` are accepted but
+ignored. Proxy authentication challenges (407) are not handled; if the proxy
+needs credentials, embed them in `proxyServer` as above.
+
+Caveat: with `--stealth`, the stealth transport's SOCKS5 support is limited
+(the wreq client rejects plain SOCKS5 proxies); prefer an HTTP proxy when
+using per-context proxies with stealth builds.
+
 ## Custom User-Agent
 
 ```bash
