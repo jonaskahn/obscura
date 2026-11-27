@@ -68,24 +68,40 @@ pub async fn handle(
                 .and_then(|v| v.as_str())
                 .unwrap_or("about:blank");
             let context_id = params.get("browserContextId").and_then(|v| v.as_str());
-            let context = match context_id {
-                Some(id) => ctx
-                    .browser_context(id)
-                    .ok_or_else(|| format!("Browser context not found: {}", id))?,
-                None => &ctx.default_context,
-            };
 
+            // Obscura extension: a proxy can be supplied per createTarget so
+            // each call routes through a different upstream. Chrome only
+            // accepts a proxy on createBrowserContext. Empty strings are
+            // treated as absent, matching createBrowserContext.
+            let proxy = params
+                .get("proxyServer")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let bypass = params
+                .get("proxyBypassList")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+
+            let context = ctx.resolve_context(context_id)?;
             // Same gate as Page.navigate (GHSA-q55h-vfv9-qcr5). Without this,
             // a CDP client can call Target.createTarget {url:"file:///etc/passwd"}
             // and then Runtime.evaluate the body off the created target,
-            // bypassing the page-domain check entirely.
+            // bypassing the page-domain check entirely. The proxied isolated
+            // copy inherits allow_file_access from this template, so the gate
+            // stays consistent.
             if url_is_file_scheme(url) && !context.allow_file_access {
                 return Err(
                     "Target.createTarget to file:// is disabled. Restart with `obscura serve --allow-file-access` to enable.".to_string()
                 );
             }
 
-            let page_id = ctx.create_page_in_context(context_id)?;
+            let page_id = if proxy.is_some() || bypass.is_some() {
+                ctx.create_page_with_proxy(context_id, proxy, bypass)?
+            } else {
+                ctx.create_page_in_context(context_id)?
+            };
             let session_id = format!("{}-session", page_id);
 
             let committed_document = if let Some(page) = ctx.get_page_mut(&page_id) {
@@ -403,6 +419,44 @@ mod tests {
         let created = ctx.browser_context(id).unwrap();
         assert_eq!(created.proxy_url.as_deref(), Some("http://startup.test:8080"));
         assert_eq!(created.proxy_bypass_list, None);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_target_with_proxy_server_uses_isolated_context() {
+        let mut ctx = CdpContext::new_with_proxy(Some("http://startup.test:8080".into()));
+        let result = handle("createTarget", &json!({
+            "url": "about:blank",
+            "proxyServer": "http://proxy.test:8080",
+            "proxyBypassList": "localhost, .internal.test",
+        }), &mut ctx, &None).await.unwrap();
+        let page_id = result["targetId"].as_str().unwrap().to_string();
+        let first_context = ctx.get_page(&page_id).unwrap().context.clone();
+        assert_eq!(first_context.proxy_url.as_deref(), Some("http://proxy.test:8080"));
+        assert_eq!(first_context.proxy_bypass_list.as_deref(), Some("localhost, .internal.test"));
+        assert_eq!(first_context.http_client.proxy_url(), Some("http://proxy.test:8080"));
+        assert_eq!(first_context.http_client.proxy_bypass_list(), Some("localhost, .internal.test"));
+        assert_ne!(first_context.id, ctx.default_context.id);
+        // The startup template is untouched; each call gets its own context.
+        assert_eq!(ctx.default_context.proxy_url.as_deref(), Some("http://startup.test:8080"));
+        assert_eq!(ctx.default_context.proxy_bypass_list, None);
+
+        let second = handle("createTarget", &json!({
+            "url": "about:blank",
+            "proxyServer": "http://other.test:9999",
+        }), &mut ctx, &None).await.unwrap();
+        let second_context = ctx.get_page(second["targetId"].as_str().unwrap()).unwrap().context.clone();
+        assert_eq!(second_context.proxy_url.as_deref(), Some("http://other.test:9999"));
+        assert_ne!(second_context.id, first_context.id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn create_target_without_proxy_keeps_default_context() {
+        let mut ctx = CdpContext::new_with_proxy(Some("http://startup.test:8080".into()));
+        let result = handle("createTarget", &json!({"url": "about:blank"}), &mut ctx, &None)
+            .await.unwrap();
+        let page = ctx.get_page(result["targetId"].as_str().unwrap()).unwrap();
+        assert_eq!(page.context.id, ctx.default_context.id);
+        assert_eq!(page.context.proxy_url.as_deref(), Some("http://startup.test:8080"));
     }
 
     #[tokio::test(flavor = "current_thread")]

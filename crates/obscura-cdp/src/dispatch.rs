@@ -265,14 +265,18 @@ impl CdpContext {
             .expect("default browser context must exist")
     }
 
-    pub fn create_page_in_context(&mut self, context_id: Option<&str>) -> Result<String, String> {
-        let context = match context_id {
+    /// Resolve a browser context by id, or the default context when `None`.
+    pub fn resolve_context(&self, context_id: Option<&str>) -> Result<Arc<BrowserContext>, String> {
+        match context_id {
             Some(id) => self
                 .browser_context(id)
                 .cloned()
-                .ok_or_else(|| format!("Browser context not found: {}", id))?,
-            None => self.default_context.clone(),
-        };
+                .ok_or_else(|| format!("Browser context not found: {}", id)),
+            None => Ok(self.default_context.clone()),
+        }
+    }
+
+    fn push_page(&mut self, context: Arc<BrowserContext>) -> String {
         self.page_counter += 1;
         let page_id = format!("page-{}", self.page_counter);
         let mut page = Page::new(page_id.clone(), context);
@@ -281,7 +285,32 @@ impl CdpContext {
         self.current_loader_ids
             .insert(page_id.clone(), format!("loader-blank-{page_id}"));
         self.lifecycle_timestamps.insert(page_id.clone(), [Some(domains::page::timestamp()); 5]);
-        Ok(page_id)
+        page_id
+    }
+
+    pub fn create_page_in_context(&mut self, context_id: Option<&str>) -> Result<String, String> {
+        let context = self.resolve_context(context_id)?;
+        Ok(self.push_page(context))
+    }
+
+    /// Create a page whose context carries a per-target proxy override. Chrome
+    /// only allows a proxy on `createBrowserContext`; this is an Obscura
+    /// extension so raw CDP callers can give each target its own proxy. The
+    /// isolated copy inherits the template's file-access and storage policy.
+    pub fn create_page_with_proxy(
+        &mut self,
+        context_id: Option<&str>,
+        proxy: Option<String>,
+        bypass: Option<String>,
+    ) -> Result<String, String> {
+        let template = self.resolve_context(context_id)?;
+        self.browser_context_counter += 1;
+        let id = format!("context-{}", self.browser_context_counter);
+        let context = Arc::new(template.isolated_copy_with_proxy(
+            id.clone(), false, proxy, bypass,
+        ));
+        self.browser_contexts.insert(id, context.clone());
+        Ok(self.push_page(context))
     }
 
     pub fn browser_context(&self, id: &str) -> Option<&Arc<BrowserContext>> {
